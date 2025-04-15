@@ -22,30 +22,30 @@ app.post('/webhook/sync', (req, res) => {
       return res.status(400).json({ error: 'Missing "action" field in request body.' });
     }
 
-    console.log(`Received webhook with action: ${action}`);
+    console.log(`without case ${data}`);
 
     switch (action) {
       case 'NEW_ORDER':
         // Логика для обработки нового заказа
-        console.log('Processing NEW_ORDER event with data:', data);
+        console.log('new', data);
         // Например, можно вызвать функцию processNewOrder(data);
         break;
 
       case 'UPDATE_ORDER':
         // Логика для обработки обновления заказа
-        console.log('Processing UPDATE_ORDER event with data:', data);
+        console.log('update', data);
         // Например, можно вызвать функцию processUpdateOrder(data);
         break;
 
       case 'NEW_ORDER_ID':
         // Логика для обработки события получения ID нового заказа
-        console.log('Processing NEW_ORDER_ID event with data:', data);
+        console.log('new ID', data);
         // Например, можно вызвать функцию processNewOrderById(data);
         break;
 
       case 'UPDATE_ORDER_ID':
         // Логика для обработки события получения ID обновлённого заказа
-        console.log('Processing UPDATE_ORDER_ID event with data:', data);
+        console.log('update ID', data);
         // Например, можно вызвать функцию processUpdateOrderById(data);
         break;
 
