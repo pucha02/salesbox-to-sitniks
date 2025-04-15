@@ -133,7 +133,7 @@ function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, set
     }
 
     const products = (sb.offers || []).map((o) => {
-        const vendorCode = o.vendorCode?.trim().toLowerCase();
+        const vendorCode = o.externalId?.trim().toLowerCase();
         const matchedVariationId = vendorCode ? sitniksVariationMap[vendorCode] : undefined;
         const quantity = Number(o.categories?.[0]?.count || 0) || 1;
 
