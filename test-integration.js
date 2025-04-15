@@ -70,43 +70,49 @@ async function fetchSitniksProductVariationMap() {
 }
 
 /**
- * Функция для получения productVariationId по совпадению SKU с externalId.
- * Запрашивает список товаров (вариаций) через API и сравнивает sku с externalId.
+ * Получить productVariationId напрямую по sku через query-параметр.
+ * Выполняется GET-запрос к API Sitniks по адресу:
+ * https://crm.sitniks.com/open-api/products/variations?sku=<sku>
  *
- * @param {string} externalId - Значение для сравнения с sku.
- * @returns {Promise<number|null>} - Идентификатор найденной вариации или null.
+ * @param {string} sku - Значение sku для поиска.
+ * @returns {Promise<number|null>} - Идентификатор вариации или null, если товар не найден или произошла ошибка.
  */
-async function getProductVariationIdByExternalId(externalId) {
-    console.debug(`getProductVariationIdByExternalId: Начало поиска для externalId: "${externalId}"`);
+async function fetchProductVariationBySku(sku) {
+    const skuNormalized = sku.trim();
+    console.debug(`fetchProductVariationBySku: Начало поиска для sku: "${skuNormalized}"`);
     try {
-        const resp = await axios.get('https://crm.sitniks.com/open-api/products/variations', {
+        const url = `https://crm.sitniks.com/open-api/products/variations?sku=${encodeURIComponent(skuNormalized)}`;
+        const resp = await axios.get(url, {
             headers: {
                 'Authorization': `Bearer ${SITNIKS_TOKEN}`,
                 'Content-Type': 'application/json'
             }
         });
-        console.debug('getProductVariationIdByExternalId: Получены данные от Sitniks:', resp.data);
-        
+        console.debug('fetchProductVariationBySku: Получены данные от Sitniks:', resp.data);
         const variations = resp.data.data || [];
-        console.debug(`getProductVariationIdByExternalId: Количество полученных вариаций: ${variations.length}`);
-        
-        const match = variations.find(variation => {
-            const skuNormalized = variation.sku ? variation.sku.trim().toLowerCase() : '';
-            const externalIdNormalized = externalId ? externalId.trim().toLowerCase() : '';
-            return skuNormalized === externalIdNormalized;
-        });
-        
-        if (match) {
-            console.debug(`getProductVariationIdByExternalId: Найден productVariationId: ${match.id}`);
-            return match.id;
+        if (variations.length > 0) {
+            console.debug(`fetchProductVariationBySku: Найден productVariationId: ${variations[0].id} для sku: "${skuNormalized}"`);
+            return variations[0].id;
         } else {
-            console.debug('getProductVariationIdByExternalId: Вариация не найдена по заданному externalId');
+            console.debug(`fetchProductVariationBySku: Вариация не найдена для sku: "${skuNormalized}"`);
             return null;
         }
     } catch (err) {
-        console.error('Ошибка получения товаров из Sitniks:', err.response?.data || err.message);
+        console.error('fetchProductVariationBySku: Ошибка получения товара по sku:', err.response?.data || err.message);
         return null;
     }
+}
+
+/**
+ * Получить productVariationId по совпадению externalId.
+ * Теперь используется fetchProductVariationBySku для прямого запроса.
+ *
+ * @param {string} externalId - Значение для сравнения с sku.
+ * @returns {Promise<number|null>} - Идентификатор найденной вариации или null.
+ */
+async function getProductVariationIdByExternalId(externalId) {
+    console.debug(`getProductVariationIdByExternalId: Поиск для externalId: "${externalId}" через fetchProductVariationBySku`);
+    return await fetchProductVariationBySku(externalId);
 }
 
 /**
@@ -170,7 +176,6 @@ async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationI
                 modifierValue = Number(selectedMod.selected.m) || 0;
             }
         }
-
         const finalUnitPrice = basePrice - (basePrice * (discountPercent / 100)) - discountAmount + modifierValue;
         return quantity * (finalUnitPrice > 0 ? finalUnitPrice : 0);
     }
@@ -181,12 +186,12 @@ async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationI
         let matchedVariationId = vendorCode ? sitniksVariationMap[vendorCode] : null;
         
         if (!matchedVariationId && vendorCode) {
-            console.debug(`mapOrderToSitniks: Вариация не найдена в маппинге для vendorCode: "${vendorCode}". Пытаемся получить по API.`);
-            matchedVariationId = await getProductVariationIdByExternalId(vendorCode);
+            console.debug(`mapOrderToSitniks: Вариация не найдена в маппинге для vendorCode: "${vendorCode}". Пытаемся получить напрямую через запрос по sku.`);
+            matchedVariationId = await fetchProductVariationBySku(vendorCode);
         }
         
         if (!matchedVariationId) {
-            // Если не найдено корректное значение, логируем предупреждение и не включаем товар в заказ
+            // Если не найдено корректное значение, логируем предупреждение и исключаем товар
             console.error(`mapOrderToSitniks: Для товара с externalId "${o.externalId}" не найден productVariationId. Пропускаем товар.`);
             return null;
         }
