@@ -7,7 +7,7 @@ app.use(express.json());
 
 // ========== Конфигурация ==========
 const SALESBOX_API_URL = 'https://prod.salesbox.me/openapi/orders/all?page=1';
-const SALESBOX_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
+const SALESBOX_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyVHlwZSI6IkFETUlOIiwidHlwZSI6IlBFUlNPTkFMX0FDQ0VTU19UT0tFTiIsIl92IjoxLCJjb21wYW55SWQiOiJzYW5hIiwiaWF0IjoxNjkxMTUzMzM2fQ.KRvTjTk-qVH98zXxLzklw6nhbOzgZR4Fs0-D5ljakS0';
 
 const SITNIKS_API_URL = 'https://crm.sitniks.com/open-api/orders';
 const SITNIKS_TOKEN = 'G7R4Q6VfQZGrFRI6szEQFEkDxmSyA3i5jmqvRuCpfz1';
@@ -105,70 +105,14 @@ async function fetchProductVariationBySku(sku) {
 
 /**
  * Получить productVariationId по совпадению externalId.
- * (Сейчас напрямую через fetchProductVariationBySku)
+ * Теперь используется fetchProductVariationBySku для прямого запроса.
+ *
+ * @param {string} externalId - Значение для сравнения с sku.
+ * @returns {Promise<number|null>} - Идентификатор найденной вариации или null.
  */
 async function getProductVariationIdByExternalId(externalId) {
     console.debug(`getProductVariationIdByExternalId: Поиск для externalId: "${externalId}" через fetchProductVariationBySku`);
     return await fetchProductVariationBySku(externalId);
-}
-
-/**
- * // === NEW ===
- * Загрузить ВСЕ вариации товаров из Sitniks (постранично).
- * Учтите, что если товаров очень много, это может быть долго и «тяжело».
- * @returns {Promise<Array>} Массив объектов вариаций.
- */
-async function fetchAllProductVariations() {
-    let allVariations = [];
-    let page = 1;
-    const pageSize = 100; // или нужное вам число
-
-    while (true) {
-        try {
-            const resp = await axios.get('https://crm.sitniks.com/open-api/products/variations', {
-                headers: {
-                    'Authorization': `Bearer ${SITNIKS_TOKEN}`,
-                    'Content-Type': 'application/json'
-                },
-                params: {
-                    limit: pageSize,
-                    skip: (page - 1) * pageSize
-                }
-            });
-            const data = resp.data.data || [];
-            if (data.length === 0) {
-                break; // больше ничего не пришло
-            }
-            allVariations = allVariations.concat(data);
-            
-            // Если вернулась порция меньше pageSize — значит, достигли конца
-            if (data.length < pageSize) {
-                break;
-            }
-            page++;
-        } catch (err) {
-            console.error('fetchAllProductVariations: ошибка при загрузке вариаций:', err.response?.data || err.message);
-            break;
-        }
-    }
-
-    console.debug(`fetchAllProductVariations: Загружено вариаций: ${allVariations.length}`);
-    return allVariations;
-}
-
-/**
- * // === NEW ===
- * Попытаться найти variationId по названию среди массива вариаций.
- * Можно настроить поиск:
- * - Точное совпадение .toLowerCase() === title.toLowerCase()
- * - Частичное include
- * - и т.д.
- */
-function findVariationIdByName(variations, title) {
-    const lowerTitle = title.trim().toLowerCase();
-    // Пример точного совпадения
-    const found = variations.find(v => (v.name || '').trim().toLowerCase() === lowerTitle);
-    return found?.id || null;
 }
 
 /**
@@ -215,6 +159,8 @@ async function fetchSettlementAccountId() {
 
 /**
  * Преобразовать заказ из SalesBox (или вебхука) в формат Sitniks.
+ * Функция использует маппинг вариаций и, при наличии, интеграцию Nova Poshta.
+ * Переделана в асинхронную для возможности получения productVariationId по значению sku/externalId.
  */
 async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, settlementAccountId) {
     function calculateProductEffectivePrice(product) {
@@ -234,42 +180,24 @@ async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationI
         return quantity * (finalUnitPrice > 0 ? finalUnitPrice : 0);
     }
 
-    // // === NEW === Загружаем все вариации заранее, чтобы не делать это в цикле слишком много раз.
-    // Если у вас мало товаров, такой подход ок. Если много — возможно, стоит кэшировать.
-    const allVariations = await fetchAllProductVariations();
-
     // Асинхронно обрабатываем товары заказа
     const products = await Promise.all((sb.offers || []).map(async (o) => {
         const vendorCode = o.externalId?.trim().toLowerCase();
-        let matchedVariationId = null;
-
-        // 1) Пытаемся найти по sku/вендорному коду через локальный map:
-        if (vendorCode) {
-            matchedVariationId = sitniksVariationMap[vendorCode];
-        }
-
-        // 2) Если не нашли в map, пробуем напрямую запросом:
+        let matchedVariationId = vendorCode ? sitniksVariationMap[vendorCode] : null;
+        
         if (!matchedVariationId && vendorCode) {
             console.debug(`mapOrderToSitniks: Вариация не найдена в маппинге для vendorCode: "${vendorCode}". Пытаемся получить напрямую через запрос по sku.`);
             matchedVariationId = await fetchProductVariationBySku(vendorCode);
         }
         
-        // === NEW ===
-        // 3) Если всё ещё не нашли, то пытаемся искать по названию,
-        //    но только если у нас есть какой-то title (o.name).
-        const title = (o.name || o.vector || o.vectorName || '').trim() || 'Товар';
-        if (!matchedVariationId && title) {
-            console.debug(`mapOrderToSitniks: Не нашли по SKU. Пробуем искать по названию "${title}".`);
-            matchedVariationId = findVariationIdByName(allVariations, title.toLowerCase());
-        }
-
         if (!matchedVariationId) {
             // Если не найдено корректное значение, логируем предупреждение и исключаем товар
-            console.error(`mapOrderToSitniks: Для товара с externalId "${o.externalId}" не найден productVariationId (ni по sku, ни по названию). Пропускаем товар.`);
+            console.error(`mapOrderToSitniks: Для товара с externalId "${o.externalId}" не найден productVariationId. Пропускаем товар.`);
             return null;
         }
         
         const quantity = Number(o.categories?.[0]?.count || 1);
+        const title = (o.name || o.vector || o.vectorName || '').trim() || 'Товар';
     
         return {
             productVariationId: matchedVariationId,
