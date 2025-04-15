@@ -184,7 +184,7 @@ function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, set
         products,
         clientComment: sb.comment || '',
         managerComment: sb.UserComments?.comment || '',
-        statusId: 24380,
+        statusId: 17923,
         utm: sb.utm || {},
         ...(npDelivery ? { npDelivery } : {}),
         payment: {

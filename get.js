@@ -5,13 +5,13 @@ const SITNIKS_TOKEN = 'G7R4Q6VfQZGrFRI6szEQFEkDxmSyA3i5jmqvRuCpfz1';
 import axios from 'axios';
 async function fetchWarehouses() {
     try {
-        const resp = await axios.get('https://crm.sitniks.com/open-api/warehouses', {
+        const resp = await axios.get('https://crm.sitniks.com/open-api/orders/statuses', {
             headers: {
                 'Authorization': `Bearer ${SITNIKS_TOKEN}`,
                 'Content-Type': 'application/json'
             }
         });
-        console.log('Список складов:', resp.data.data);
+        console.log('Список:', resp.data);
         // Предполагаем, что складские данные находятся в resp.data.data
         return resp.data.data;
     } catch (err) {
