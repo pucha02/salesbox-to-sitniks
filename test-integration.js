@@ -228,7 +228,7 @@ async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationI
 
     const npDelivery = novaPoshtaIntegrationId
         ? {
-              integrationNovaposhtaId: novaPoshtaIntegrationId,
+              integrationNovaposhtaId: 1822,
               serviceType: 'DoorsDoors',
               payerType: 'Sender',
               cargoType: 'Parcel',
