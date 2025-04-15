@@ -226,7 +226,7 @@ async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationI
 
     const safeTotal = totalPayment > 0 ? totalPayment : 0;
 
-    const npDelivery = novaPoshtaIntegrationId
+    const npDelivery = 1822
         ? {
               integrationNovaposhtaId: 1822,
               serviceType: 'DoorsDoors',
