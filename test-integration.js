@@ -175,21 +175,27 @@ async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationI
         return quantity * (finalUnitPrice > 0 ? finalUnitPrice : 0);
     }
 
-    // Обрабатываем товары асинхронно, чтобы при отсутствии вариации в маппинге попробовать получить её по API
+    // Асинхронно обрабатываем товары заказа
     const products = await Promise.all((sb.offers || []).map(async (o) => {
         const vendorCode = o.externalId?.trim().toLowerCase();
-        let matchedVariationId = vendorCode ? sitniksVariationMap[vendorCode] : undefined;
+        let matchedVariationId = vendorCode ? sitniksVariationMap[vendorCode] : null;
         
         if (!matchedVariationId && vendorCode) {
             console.debug(`mapOrderToSitniks: Вариация не найдена в маппинге для vendorCode: "${vendorCode}". Пытаемся получить по API.`);
             matchedVariationId = await getProductVariationIdByExternalId(vendorCode);
         }
         
+        if (!matchedVariationId) {
+            // Если не найдено корректное значение, логируем предупреждение и не включаем товар в заказ
+            console.error(`mapOrderToSitniks: Для товара с externalId "${o.externalId}" не найден productVariationId. Пропускаем товар.`);
+            return null;
+        }
+        
         const quantity = Number(o.categories?.[0]?.count || 1);
         const title = (o.name || o.vector || o.vectorName || '').trim() || 'Товар';
     
         return {
-            productVariationId: matchedVariationId || o.offerId,
+            productVariationId: matchedVariationId,
             isUpsale: false,
             discountPercent: o.percentageDiscount || 0,
             discountAmount: o.discount || 0,
@@ -201,6 +207,12 @@ async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationI
             warehouseId: 4224,
         };
     }));
+    
+    // Отфильтровать товары, для которых не найден productVariationId
+    const validProducts = products.filter(p => p !== null);
+    if (!validProducts.length) {
+        throw new Error('Не найдены валидные товары для создания заказа');
+    }
 
     const bonusesUsed = Number(sb.bonusesUsed || 0);
     const totalPayment = (sb.offers || []).reduce((sum, o) => {
@@ -232,7 +244,7 @@ async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationI
             fullname: sb.customerName || '',
             phone: sb.phone,
         },
-        products,
+        products: validProducts,
         clientComment: sb.comment || '',
         managerComment: sb.UserComments?.comment || '',
         statusId: 17923,
