@@ -6,7 +6,6 @@ const app = express();
 app.use(express.json());
 
 // ========== Конфигурация ==========
-
 const SALESBOX_API_URL = 'https://prod.salesbox.me/openapi/orders/all?page=1';
 const SALESBOX_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyVHlwZSI6IkFETUlOIiwidHlwZSI6IlBFUlNPTkFMX0FDQ0VTU19UT0tFTiIsIl92IjoxLCJjb21wYW55SWQiOiJzYW5hIiwiaWF0IjoxNjkxMTUzMzM2fQ.KRvTjTk-qVH98zXxLzklw6nhbOzgZR4Fs0-D5ljakS0';
 
@@ -54,16 +53,59 @@ async function fetchSitniksProductVariationMap() {
   
         const variations = resp.data.data || [];
   
-        return variations.reduce((map, variation) => {
+        const map = variations.reduce((map, variation) => {
             const sku = variation.sku?.trim().toLowerCase();
             if (sku) {
                 map[sku] = variation.id;
             }
             return map;
         }, {});
+  
+        console.debug(`fetchSitniksProductVariationMap: Получено ${Object.keys(map).length} вариаций`);
+        return map;
     } catch (err) {
         console.error('Ошибка получения вариаций товаров из Sitniks:', err.response?.data || err.message);
         return {};
+    }
+}
+
+/**
+ * Функция для получения productVariationId по совпадению SKU с externalId.
+ * Запрашивает список товаров (вариаций) через API и сравнивает sku с externalId.
+ *
+ * @param {string} externalId - Значение для сравнения с sku.
+ * @returns {Promise<number|null>} - Идентификатор найденной вариации или null.
+ */
+async function getProductVariationIdByExternalId(externalId) {
+    console.debug(`getProductVariationIdByExternalId: Начало поиска для externalId: "${externalId}"`);
+    try {
+        const resp = await axios.get('https://crm.sitniks.com/open-api/products/variations', {
+            headers: {
+                'Authorization': `Bearer ${SITNIKS_TOKEN}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        console.debug('getProductVariationIdByExternalId: Получены данные от Sitniks:', resp.data);
+        
+        const variations = resp.data.data || [];
+        console.debug(`getProductVariationIdByExternalId: Количество полученных вариаций: ${variations.length}`);
+        
+        const match = variations.find(variation => {
+            const skuNormalized = variation.sku ? variation.sku.trim().toLowerCase() : '';
+            const externalIdNormalized = externalId ? externalId.trim().toLowerCase() : '';
+            return skuNormalized === externalIdNormalized;
+        });
+        
+        if (match) {
+            console.debug(`getProductVariationIdByExternalId: Найден productVariationId: ${match.id}`);
+            return match.id;
+        } else {
+            console.debug('getProductVariationIdByExternalId: Вариация не найдена по заданному externalId');
+            return null;
+        }
+    } catch (err) {
+        console.error('Ошибка получения товаров из Sitniks:', err.response?.data || err.message);
+        return null;
     }
 }
 
@@ -111,14 +153,15 @@ async function fetchSettlementAccountId() {
 
 /**
  * Преобразовать заказ из SalesBox (или вебхука) в формат Sitniks.
- * Функция использует mаппинг вариаций и, при наличии, интеграцию Nova Poshta.
+ * Функция использует маппинг вариаций и, при наличии, интеграцию Nova Poshta.
+ * Переделана в асинхронную для возможности получения productVariationId по значению sku/externalId.
  */
-function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, settlementAccountId) {
+async function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, settlementAccountId) {
     function calculateProductEffectivePrice(product) {
         const basePrice = Number(product.price || 0);
         const discountPercent = Number(product.percentageDiscount || 0);
         const discountAmount = Number(product.discount || 0);
-        const quantity = Number(product.categories?.[0]?.count || 0) || 1;
+        const quantity = Number(product.categories?.[0]?.count || 1);
 
         let modifierValue = 0;
         if (Array.isArray(product.modifiers)) {
@@ -132,11 +175,19 @@ function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, set
         return quantity * (finalUnitPrice > 0 ? finalUnitPrice : 0);
     }
 
-    const products = (sb.offers || []).map((o) => {
+    // Обрабатываем товары асинхронно, чтобы при отсутствии вариации в маппинге попробовать получить её по API
+    const products = await Promise.all((sb.offers || []).map(async (o) => {
         const vendorCode = o.externalId?.trim().toLowerCase();
-        const matchedVariationId = vendorCode ? sitniksVariationMap[vendorCode] : undefined;
-        const quantity = Number(o.categories?.[0]?.count || 0) || 1;
-
+        let matchedVariationId = vendorCode ? sitniksVariationMap[vendorCode] : undefined;
+        
+        if (!matchedVariationId && vendorCode) {
+            console.debug(`mapOrderToSitniks: Вариация не найдена в маппинге для vendorCode: "${vendorCode}". Пытаемся получить по API.`);
+            matchedVariationId = await getProductVariationIdByExternalId(vendorCode);
+        }
+        
+        const quantity = Number(o.categories?.[0]?.count || 1);
+        const title = (o.name || o.vector || o.vectorName || '').trim() || 'Товар';
+    
         return {
             productVariationId: matchedVariationId || o.offerId,
             isUpsale: false,
@@ -145,11 +196,11 @@ function mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, set
             price: Number(o.price || 0),
             costPrice: Number(o.costPrice || o.price || 0),
             quantity,
-            title: o.name || '',
-            notes: o.description,
+            title,
+            notes: (o.description || '').trim(),
             warehouseId: 4224,
         };
-    });
+    }));
 
     const bonusesUsed = Number(sb.bonusesUsed || 0);
     const totalPayment = (sb.offers || []).reduce((sum, o) => {
@@ -204,7 +255,6 @@ async function createSitniksOrder(body) {
 }
 
 // ========== Маршрут вебхука ==========
-
 app.post('/webhook/sync', async (req, res) => {
     try {
         const webhookData = req.body;
@@ -223,7 +273,7 @@ app.post('/webhook/sync', async (req, res) => {
         const settlementAccountId = await fetchSettlementAccountId();
 
         // Преобразуем входящий заказ (формат SalesBox) в формат Sitniks
-        const orderBody = mapOrderToSitniks(
+        const orderBody = await mapOrderToSitniks(
             webhookData,
             sitniksVariationMap,
             novaPoshtaIntegrationId,
@@ -243,7 +293,6 @@ app.post('/webhook/sync', async (req, res) => {
 });
 
 // ========== Прочие маршруты, например, тестовый перелив ==========
-
 app.get('/test-transfer', async (req, res) => {
     try {
         const limit = parseInt(req.query.limit, 10) || 5;
@@ -252,7 +301,6 @@ app.get('/test-transfer', async (req, res) => {
         const novaPoshtaIntegrationId = await fetchNovaPoshtaIntegrationId();
         const settlementAccountId = await fetchSettlementAccountId();
 
-        // Пример: получение заказов из SalesBox (замените на реальную логику, если требуется)
         const ordersResponse = await salesboxClient.get('', { params: { lang: 'uk', page: 1, pageSize: limit } });
         const orders = ordersResponse.data.data || [];
 
@@ -266,7 +314,7 @@ app.get('/test-transfer', async (req, res) => {
                     continue;
                 }
 
-                const body = mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, settlementAccountId);
+                const body = await mapOrderToSitniks(sb, sitniksVariationMap, novaPoshtaIntegrationId, settlementAccountId);
                 console.log('Payload для создания заказа в Sitniks:', body);
                 const created = await createSitniksOrder(body);
                 report.push({
